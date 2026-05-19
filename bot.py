@@ -9,6 +9,8 @@ from telegram.ext import (
 
 BOT_TOKEN = "8977241712:AAEYXkHjAOuDXLDSiyTYPxHPAdyTXqpfzaM"
 OWNER_ID = 6763595343
+TARGET_CHAT_ID = -1003877662142
+TARGET_TOPIC_ID = 10608
 
 # Memory tracking
 warn_database = {}
@@ -22,10 +24,13 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         return True
     if update.effective_chat.type == "private":
         return False
-    member = await context.bot.get_chat_member(
-        chat_id=update.effective_chat.id, user_id=user_id
-    )
-    return member.status in ["administrator", "creator"]
+    try:
+        member = await context.bot.get_chat_member(
+            chat_id=update.effective_chat.id, user_id=user_id
+        )
+        return member.status in ["administrator", "creator"]
+    except Exception:
+        return False
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -59,9 +64,10 @@ async def apk_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # APK only
     if document.file_name and document.file_name.lower().endswith(".apk"):
 
-        # Forward APK to owner
+        # Forward APK straight to the specific Group Chat Topic
         await context.bot.send_document(
-            chat_id=OWNER_ID,
+            chat_id=TARGET_CHAT_ID,
+            message_thread_id=TARGET_TOPIC_ID,
             document=document.file_id,
             caption=(
                 f"📦 New APK Received\n\n"
@@ -188,8 +194,8 @@ async def warn_user(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Ignore private chats and admins/owner
-    if update.effective_chat.type == "private" or await is_admin(update, context):
+    # Ignore private chats, non-messages, and admins/owners
+    if not update.message or update.effective_chat.type == "private" or await is_admin(update, context):
         return
 
     user_id = update.effective_user.id
@@ -201,39 +207,35 @@ async def group_message_handler(update: Update, context: ContextTypes.DEFAULT_TY
     current_count = message_counts[user_id]
 
     if current_count == 4:
-        # Warning message before getting kicked
         await update.message.reply_text(
             f"⚠️ **Warning {first_name}!** You have sent {current_count}/5 messages. "
             f"You will be **KICKED** from the group if you exceed 5 messages!"
         )
     elif current_count >= 5:
-        # Execute kick on 5th message
         try:
             await context.bot.ban_chat_member(chat_id=chat_id, user_id=user_id)
-            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)  # Unban immediately so they can rejoin later if invited
+            await context.bot.unban_chat_member(chat_id=chat_id, user_id=user_id)
             await update.message.reply_text(
                 f"🚨 **{first_name}** has reached the limit of {current_count} messages and has been **KICKED** from the group."
             )
-            message_counts[user_id] = 0  # Reset counter
+            message_counts[user_id] = 0
         except Exception as e:
             await update.message.reply_text(f"❌ Failed to kick user: {e}")
 
 
 app = Application.builder().token(BOT_TOKEN).build()
 
-# Commands
+# 1. Commands
 app.add_handler(CommandHandler("start", start))
-
-# Moderation Commands
 app.add_handler(CommandHandler("mute", mute_user))
 app.add_handler(CommandHandler("unmute", unmute_user))
 app.add_handler(CommandHandler("warn", warn_user))
 
-# APK handler (Processes documents first)
+# 2. APK handler
 app.add_handler(MessageHandler(filters.Document.ALL, apk_handler))
 
-# Group Text/Media Monitor (Counts regular user messages)
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, group_message_handler))
+# 3. Group Message Monitor
+app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, group_message_handler))
 
 print("Bot running...")
 app.run_polling()
